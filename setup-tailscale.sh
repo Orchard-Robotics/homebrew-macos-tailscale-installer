@@ -26,6 +26,8 @@ if ! command -v brew >/dev/null; then
     exit 1
 fi
 
+set +e
+
 if brew tap | grep orchard-robotics/macos-tailscale-installer >/dev/null; then
     echo "  ✓ Brew Tap already installed, reinstalling"
     brew untap --force Orchard-Robotics/macos-tailscale-installer
@@ -51,6 +53,14 @@ if brew list --formula orchard-robotics/macos-tailscale-installer/tailscale >/de
 else
     brew install --formula orchard-robotics/macos-tailscale-installer/tailscale
     echo "  ✓ Tailscale installed"
+fi
+
+set -e
+
+if brew list --formula orchard-robotics/macos-tailscale-installer/tailscale orchard-robotics/macos-tailscale-installer/trayscale >/dev/null; then
+    echo "  ✓ Tailscale and Trayscale Successfully Installed"
+else
+    echo "  Error: Unable to install tailscale and trayscale! Try running the script again."
 fi
 
 # Start the Tailscale service
