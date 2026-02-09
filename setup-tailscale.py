@@ -6,11 +6,25 @@ import os
 import time
 import getpass
 import shutil
+import tempfile
 
 TAP = "Orchard-Robotics/macos-tailscale-installer"
 TAP_LOWER = TAP.lower()
 TRAYSCALE_FORMULA = f"orchard-robotics/macos-tailscale-installer/trayscale"
 TAILSCALE_FORMULA = f"orchard-robotics/macos-tailscale-installer/tailscale"
+
+
+def sudo_write(path, content):
+    """Write content to a root-owned path via a temp file + sudo mv."""
+    fd, tmp = tempfile.mkstemp()
+    try:
+        os.write(fd, content.encode())
+        os.close(fd)
+        run(["sudo", "mv", tmp, path])
+        run(["sudo", "chmod", "755", path])
+    except Exception:
+        os.unlink(tmp)
+        raise
 
 
 def run(cmd, check=True, sudo=False, capture=False, **kwargs):
@@ -150,14 +164,12 @@ def step_dns():
 
     print(f"  Found DNS domain: {dns_domain}")
 
-    search_conf = f"# Added by tailscaled\nsearch {dns_domain}\n"
-    run(["sudo", "tee", "/etc/resolver/search.tailscale"],
-        input=search_conf.encode(), capture=True)
+    sudo_write("/etc/resolver/search.tailscale",
+               f"# Added by tailscaled\nsearch {dns_domain}\n")
     print("  ✓ Created /etc/resolver/search.tailscale")
 
-    magicdns_conf = f"domain {dns_domain}\nnameserver 100.100.100.100\n"
-    run(["sudo", "tee", "/etc/resolver/magicdns.tailscale"],
-        input=magicdns_conf.encode(), capture=True)
+    sudo_write("/etc/resolver/magicdns.tailscale",
+               f"domain {dns_domain}\nnameserver 100.100.100.100\n")
     print("  ✓ Created /etc/resolver/magicdns.tailscale")
 
     run(["sudo", "dscacheutil", "-flushcache"])
