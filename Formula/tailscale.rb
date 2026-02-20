@@ -21,7 +21,7 @@ class Tailscale < Formula
 #     sha256 cellar: :any_skip_relocation, x86_64_linux:  "9a0fc1d71206b6ace0526d9c2650abd9da7d139228aeca01a4ec8ed9531ff126"
 #   end
 
-  depends_on "go" => :build
+  depends_on "go@1.25" => :build
 
   conflicts_with cask: "tailscale-app"
 
