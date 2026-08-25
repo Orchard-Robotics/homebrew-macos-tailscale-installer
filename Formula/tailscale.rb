@@ -26,6 +26,13 @@ class Tailscale < Formula
   conflicts_with cask: "tailscale-app"
 
   def install
+    # Go 1.27 enables the jsonv2 GOEXPERIMENT by default, which makes
+    # go-json-experiment/json alias the stdlib encoding/json/v2 package.
+    # The pinned version of that module references symbols (SkipFunc,
+    # DiscardUnknownMembers) the stdlib no longer exports, so the build
+    # fails. Disable the experiment to use the module's own implementation.
+    ENV["GOEXPERIMENT"] = "nojsonv2"
+
     vars = Utils.safe_popen_read("./build_dist.sh", "shellvars")
     ldflags = %W[
       -s -w
