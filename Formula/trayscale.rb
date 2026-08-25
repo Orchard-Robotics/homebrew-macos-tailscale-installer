@@ -32,6 +32,13 @@ class Trayscale < Formula
 
   def install
 
+    # Go 1.27 enables the jsonv2 GOEXPERIMENT by default, which makes
+    # go-json-experiment/json alias the stdlib encoding/json/v2 package.
+    # The pinned version of that module references symbols (SkipFunc,
+    # DiscardUnknownMembers) the stdlib no longer exports, so the build
+    # fails. Disable the experiment to use the module's own implementation.
+    ENV["GOEXPERIMENT"] = "nojsonv2"
+
     metainfo = File.read("dev.deedles.Trayscale.metainfo.xml")
     app_version = metainfo[/<release\s+version="([^"]+)"/, 1] || version
 
