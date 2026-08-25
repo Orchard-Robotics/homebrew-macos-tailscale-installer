@@ -10,6 +10,9 @@ import tempfile
 
 TAP = "Orchard-Robotics/macos-tailscale-installer"
 TAP_LOWER = TAP.lower()
+# TEMPORARY: pin the tap to the branch carrying the Go 1.27 build fix.
+# Set back to None once that PR is merged into main.
+TAP_BRANCH = "fix/goexperiment-nojsonv2"
 TRAYSCALE_FORMULA = f"orchard-robotics/macos-tailscale-installer/trayscale"
 TAILSCALE_FORMULA = f"orchard-robotics/macos-tailscale-installer/tailscale"
 
@@ -23,7 +26,9 @@ def sudo_write(path, content):
         run(["sudo", "mv", tmp, path])
         run(["sudo", "chmod", "755", path])
     except Exception:
-        os.unlink(tmp)
+        # The mv may already have consumed tmp, so removing it is best-effort.
+        if os.path.exists(tmp):
+            os.unlink(tmp)
         raise
 
 
@@ -38,6 +43,11 @@ def run(cmd, check=True, sudo=False, capture=False, **kwargs):
         **kwargs,
     )
     return result
+
+
+def tailscale_bin():
+    """Absolute path to tailscale, so sudo does not depend on its PATH."""
+    return shutil.which("tailscale") or "tailscale"
 
 
 def is_installed(formula):
@@ -62,9 +72,19 @@ def step_xcode():
         print("  ✓ Xcode Command Line Tools already installed")
     else:
         print("  Installing Xcode Command Line Tools...")
-        run(["xcode-select", "--install"])
-        print("  Please complete the installation dialog, then press Enter to continue.")
-        input()
+        run(["xcode-select", "--install"], check=False)
+        print("  Please complete the installation dialog. Waiting for it to finish...")
+        # Do not read stdin here: when this script is piped from curl, stdin is
+        # the script itself and is already at EOF, so input() would raise
+        # EOFError. Poll for the tools instead.
+        for _ in range(360):  # up to 30 minutes
+            time.sleep(5)
+            if run(["xcode-select", "-p"], check=False, capture=True).returncode == 0:
+                break
+        else:
+            print("  Error: timed out waiting for Xcode Command Line Tools")
+            sys.exit(1)
+        print("  ✓ Xcode Command Line Tools installed")
 
 
 def step_brew_install():
@@ -82,7 +102,15 @@ def step_brew_install():
         print("  ✓ Brew Tap already installed, reinstalling")
         run(["brew", "untap", "--force", TAP])
     run(["brew", "tap", TAP])
-    print(f"  ✓ Brew Tap ({TAP_LOWER}) installed")
+    if TAP_BRANCH:
+        tap_dir = run(["brew", "--repo", TAP], capture=True).stdout.strip()
+        # Check out FETCH_HEAD rather than origin/<branch>: brew clones taps
+        # single-branch, so the remote-tracking ref may not exist.
+        run(["git", "-C", tap_dir, "fetch", "origin", TAP_BRANCH])
+        run(["git", "-C", tap_dir, "checkout", "-B", TAP_BRANCH, "FETCH_HEAD"])
+        print(f"  ✓ Brew Tap ({TAP_LOWER}) installed, pinned to {TAP_BRANCH}")
+    else:
+        print(f"  ✓ Brew Tap ({TAP_LOWER}) installed")
 
     # Install trayscale
     if is_installed(TRAYSCALE_FORMULA):
@@ -111,12 +139,15 @@ def step_start_service():
     print()
     print("[3/6] Starting Tailscale service...")
     run(["sudo", "pkill", "-f", "tailscaled"], check=False)
-    run(["sudo", "brew", "services", "start", "tailscale"])
+    run(["sudo", "brew", "services", "start", TAILSCALE_FORMULA])
 
     # Wait for tailscaled to be ready
+    ts = tailscale_bin()
     for i in range(30):
-        result = run(["tailscale", "status"], check=False, capture=True)
-        if result.returncode == 0:
+        result = run([ts, "status"], check=False, capture=True)
+        # A fresh install is not logged in yet, so tailscale status exits
+        # non-zero. That still means tailscaled is up and reachable.
+        if result.returncode == 0 or "Logged out" in (result.stdout or ""):
             break
         time.sleep(1)
     else:
@@ -128,7 +159,7 @@ def step_start_service():
 def step_connect():
     print()
     print("[4/6] Connecting to Tailscale...")
-    run(["sudo", "tailscale", "up"])
+    run(["sudo", tailscale_bin(), "up"])
     print("  ✓ Tailscale connected")
 
 
@@ -136,9 +167,9 @@ def step_configure():
     print()
     print("[5/6] Configuring Tailscale settings...")
     user = getpass.getuser()
-    run(["sudo", "tailscale", "set", f"--operator={user}"])
+    run(["sudo", tailscale_bin(), "set", f"--operator={user}"])
     print(f"  ✓ {user} set as operator")
-    run(["sudo", "tailscale", "set", "--accept-routes=true"])
+    run(["sudo", tailscale_bin(), "set", "--accept-routes=true"])
     print("  ✓ Accept routes enabled")
 
 
@@ -147,7 +178,7 @@ def step_dns():
     print("[6/6] Configuring DNS resolver for MagicDNS...")
     run(["sudo", "mkdir", "-p", "/etc/resolver"])
 
-    result = run(["tailscale", "dns", "status"], capture=True)
+    result = run([tailscale_bin(), "dns", "status"], capture=True)
     dns_domain = None
     capture_next = False
     for line in result.stdout.splitlines():
