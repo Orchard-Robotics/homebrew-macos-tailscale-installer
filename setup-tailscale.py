@@ -10,9 +10,10 @@ import tempfile
 
 TAP = "Orchard-Robotics/macos-tailscale-installer"
 TAP_LOWER = TAP.lower()
-# TEMPORARY: pin the tap to the branch carrying the Go 1.27 build fix.
-# Set back to None once that PR is merged into main.
-TAP_BRANCH = "fix/goexperiment-nojsonv2"
+# Optional tap branch to install from. None uses the tap's default branch,
+# which is what you want normally; set it to a branch name to test a formula
+# change before it is merged.
+TAP_BRANCH = None
 TRAYSCALE_FORMULA = f"orchard-robotics/macos-tailscale-installer/trayscale"
 TAILSCALE_FORMULA = f"orchard-robotics/macos-tailscale-installer/tailscale"
 
@@ -48,6 +49,30 @@ def run(cmd, check=True, sudo=False, capture=False, **kwargs):
 def tailscale_bin():
     """Absolute path to tailscale, so sudo does not depend on its PATH."""
     return shutil.which("tailscale") or "tailscale"
+
+
+def pin_tap_branch():
+    """Check out TAP_BRANCH in the tap and confirm it stuck.
+
+    Homebrew's auto-update runs `brew update`, which force-resets every tap
+    back to its default branch. That silently undid this checkout and the
+    install then built main's formulae. HOMEBREW_NO_AUTO_UPDATE (set in
+    main) prevents it; re-assert the branch before each install anyway, and
+    fail loudly rather than building the wrong formula.
+    """
+    if not TAP_BRANCH:
+        return
+    tap_dir = run(["brew", "--repo", TAP], capture=True).stdout.strip()
+    # Check out FETCH_HEAD rather than origin/<branch>: brew may clone taps
+    # single-branch, so the remote-tracking ref is not guaranteed to exist.
+    run(["git", "-C", tap_dir, "fetch", "origin", TAP_BRANCH])
+    run(["git", "-C", tap_dir, "checkout", "-B", TAP_BRANCH, "FETCH_HEAD"])
+
+    head = run(["git", "-C", tap_dir, "rev-parse", "--abbrev-ref", "HEAD"],
+               capture=True).stdout.strip()
+    if head != TAP_BRANCH:
+        print(f"  Error: tap is on '{head}', expected '{TAP_BRANCH}'")
+        sys.exit(1)
 
 
 def is_installed(formula):
@@ -102,17 +127,14 @@ def step_brew_install():
         print("  ✓ Brew Tap already installed, reinstalling")
         run(["brew", "untap", "--force", TAP])
     run(["brew", "tap", TAP])
+    pin_tap_branch()
     if TAP_BRANCH:
-        tap_dir = run(["brew", "--repo", TAP], capture=True).stdout.strip()
-        # Check out FETCH_HEAD rather than origin/<branch>: brew clones taps
-        # single-branch, so the remote-tracking ref may not exist.
-        run(["git", "-C", tap_dir, "fetch", "origin", TAP_BRANCH])
-        run(["git", "-C", tap_dir, "checkout", "-B", TAP_BRANCH, "FETCH_HEAD"])
         print(f"  ✓ Brew Tap ({TAP_LOWER}) installed, pinned to {TAP_BRANCH}")
     else:
         print(f"  ✓ Brew Tap ({TAP_LOWER}) installed")
 
     # Install trayscale
+    pin_tap_branch()
     if is_installed(TRAYSCALE_FORMULA):
         print("  ✓ Trayscale already installed, reinstalling")
         run(["brew", "cleanup", "--prune=0", "-s", TRAYSCALE_FORMULA], check=False)
@@ -123,6 +145,7 @@ def step_brew_install():
     print("  ✓ Trayscale installed")
 
     # Install tailscale
+    pin_tap_branch()
     if is_installed(TAILSCALE_FORMULA):
         print("  ✓ Tailscale already installed, reinstalling"  )
         run(["brew", "cleanup", "--prune=0", "-s", TAILSCALE_FORMULA], check=False)
@@ -238,6 +261,10 @@ def step_install_app():
 def main():
     print("=== macOS Tailscale + Trayscale Setup Script ===")
     print()
+
+    # brew's auto-update force-resets taps to their default branch, which
+    # would undo the TAP_BRANCH pin mid-run.
+    os.environ["HOMEBREW_NO_AUTO_UPDATE"] = "1"
 
     step_xcode()
     step_brew_install()
